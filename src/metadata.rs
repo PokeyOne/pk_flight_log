@@ -203,14 +203,14 @@ impl FieldName {
         }
     }
 
-    pub fn from_str(name: &str) -> Self {
-        let mut name_bytes = heapless::Vec::<u8, FIELD_NAME_MAX_LEN>::new();
-        for byte in name.bytes() {
-            if name_bytes.push(byte).is_err() {
-                break;
-            }
+    pub fn from_str_truncating(s: &str) -> Self {
+        let mut end = s.len().min(FIELD_NAME_MAX_LEN);
+        while !s.is_char_boundary(end) {
+            end -= 1;
         }
-        Self { name: name_bytes }
+        Self {
+            name: heapless::Vec::from_slice(&s.as_bytes()[..end]).unwrap(),
+        }
     }
 
     pub fn inner(&self) -> &[u8] {
@@ -218,10 +218,9 @@ impl FieldName {
     }
 }
 
-#[cfg(any(test, feature = "std"))]
-impl std::fmt::Display for FieldName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match std::string::String::from_utf8(self.name.to_vec()) {
+impl core::fmt::Display for FieldName {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match core::str::from_utf8(&self.name) {
             Ok(s) => write!(f, "{}", s),
             Err(_) => write!(f, "<invalid UTF-8>"),
         }

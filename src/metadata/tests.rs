@@ -7,7 +7,7 @@ fn test_find_packet_def() {
     let mut metadata = Metadata::empty();
     let packet_def = PacketDef {
         id: 1,
-        name: FieldName::from_str("pac"),
+        name: FieldName::from_str_truncating("pac"),
         log_to_terminal: true,
         values: heapless::Vec::new(),
     };
@@ -19,22 +19,22 @@ fn test_find_packet_def() {
 
 #[test]
 fn test_field_name_from_str() {
-    let name = FieldName::from_str("test");
+    let name = FieldName::from_str_truncating("test");
     assert_eq!(name.inner(), b"test");
 
-    let long_name = FieldName::from_str("longer_than_8_bytes");
+    let long_name = FieldName::from_str_truncating("longer_than_8_bytes");
     assert_eq!(long_name.inner(), b"longer_t");
 }
 
 #[test]
 fn test_field_name_serialize() {
-    let name = FieldName::from_str("test");
+    let name = FieldName::from_str_truncating("test");
     let mut buf = [0u8; 10];
     let size = name.serialize(&mut buf).unwrap();
     assert_eq!(size, 5);
     assert_eq!(&buf[..size], b"test\0");
 
-    let long_name = FieldName::from_str("longer_than_8_bytes");
+    let long_name = FieldName::from_str_truncating("longer_than_8_bytes");
     let mut buf = [0u8; 10];
     let size = long_name.serialize(&mut buf).unwrap();
     assert_eq!(size, 9);
@@ -62,7 +62,7 @@ fn test_value_def_serialize() {
 fn test_serialize_packet_def() {
     let pdef = PacketDef {
         id: 7,
-        name: FieldName::from_str("pac"),
+        name: FieldName::from_str_truncating("pac"),
         log_to_terminal: true,
         values: heapless::Vec::from_slice(&[EX_VALUE_DEF.clone()]).unwrap(),
     };
@@ -81,7 +81,7 @@ fn test_serialize_packet_def() {
 fn test_serialize_packet_def_buffer_too_small() {
     let pdef = PacketDef {
         id: 7,
-        name: FieldName::from_str("pac"),
+        name: FieldName::from_str_truncating("pac"),
         log_to_terminal: true,
         values: heapless::Vec::from_slice(&[EX_VALUE_DEF.clone()]).unwrap(),
     };
@@ -169,7 +169,7 @@ fn test_deserialize_value_kind() {
 fn test_deserialize_packet_def() {
     let pdef = PacketDef {
         id: 7,
-        name: FieldName::from_str("pac"),
+        name: FieldName::from_str_truncating("pac"),
         log_to_terminal: true,
         values: heapless::Vec::from_slice(&[EX_VALUE_DEF.clone()]).unwrap(),
     };
@@ -186,7 +186,7 @@ fn test_deserialize_packet_def() {
 fn test_deserialize_packet_def_v1() {
     let pdef = PacketDef {
         id: 7,
-        name: FieldName::from_str("pac"),
+        name: FieldName::from_str_truncating("pac"),
         // The log to terminal flag should just default to false because it
         // never existed in the V1 format.
         log_to_terminal: false,
@@ -207,13 +207,13 @@ fn test_metadata_isomorphic_serde() {
         packet_defs: heapless::Vec::from_slice(&[
             PacketDef {
                 id: 1,
-                name: FieldName::from_str("pac1"),
+                name: FieldName::from_str_truncating("pac1"),
                 log_to_terminal: true,
                 values: heapless::Vec::from_slice(&[EX_VALUE_DEF.clone()]).unwrap(),
             },
             PacketDef {
                 id: 2,
-                name: FieldName::from_str("pac2"),
+                name: FieldName::from_str_truncating("pac2"),
                 log_to_terminal: false,
                 values: heapless::Vec::from_slice(&[EX_VALUE_DEF.clone()]).unwrap(),
             },
