@@ -9,6 +9,19 @@ pub type PacketID = u8;
 pub type PacketTimestamp = u16;
 pub const PACKET_HEADER_SIZE: usize = size_of::<PacketID>() + size_of::<PacketTimestamp>();
 
+/// Header information stored in a packet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PacketHeader {
+    pub id: PacketID,
+    pub timestamp: PacketTimestamp,
+}
+
+impl PacketHeader {
+    pub fn new(id: PacketID, timestamp: PacketTimestamp) -> Self {
+        Self { id, timestamp }
+    }
+}
+
 /// Reserved packet ID for timesync packets.
 pub const TIME_SYNC_PACKET_ID: PacketID = 0;
 
@@ -47,8 +60,9 @@ impl<'a> PacketWriter<'a> {
     /// # Params
     ///
     /// * `buf` - The buffer to write the packet to. Must be at least 3 bytes in length.
-    /// * `packet_id` - The ID of the packet. Will be written to the first byte of the buffer.
-    /// * `timestamp` - The timestamp of the packet. Will be written to bytes 1-2 of the buffer in little-endian format.
+    /// * `header` - The header of the packet, containing the ID and timestamp.
+    ///   The ID will be written to the first byte of the buffer, and the
+    ///   timestamp will be written to bytes 1-2 in little-endian format.
     ///
     /// Timestamp should be relative to the last packet written, except for the
     /// first packet in the block, which is relative to the start of the block.
@@ -57,19 +71,19 @@ impl<'a> PacketWriter<'a> {
     ///
     /// Will return None if the buffer is too small to write the packet header.
     /// (3 bytes: 1 for packet ID, 2 for timestamp)
-    pub fn new(buf: &'a mut [u8], packet_id: PacketID, timestamp: PacketTimestamp) -> Option<Self> {
+    pub fn new(buf: &'a mut [u8], header: PacketHeader) -> Option<Self> {
         if buf.len() < 3 {
             return None;
         }
 
-        buf[0] = packet_id;
+        buf[0] = header.id;
         let mut result = Self {
             buf,
             used: 3,
             sub_byte_bits_used: 0,
         };
 
-        result.set_timestamp(timestamp);
+        result.set_timestamp(header.timestamp);
 
         Some(result)
     }
@@ -289,11 +303,11 @@ impl<'a> PacketValueReader<'a> {
 
     /// Read the header of the packet, which is essentially just the packet
     /// ID and the timestamp.
-    fn read_header(&mut self) -> Result<(PacketID, PacketTimestamp), BinaryDeserializeError> {
+    fn read_header(&mut self) -> Result<PacketHeader, BinaryDeserializeError> {
         let id = self.read_packet_id()?;
         let timestamp = self.read_packet_timestamp()?;
 
-        Ok((id, timestamp))
+        Ok(PacketHeader { id, timestamp })
     }
 
     /// Parse the header and return an iterator for parsing all the values
@@ -303,7 +317,7 @@ impl<'a> PacketValueReader<'a> {
         packet_defs: &'b [PacketDef],
     ) -> Result<
         (
-            (PacketID, PacketTimestamp),
+            PacketHeader,
             impl Iterator<Item = Result<PacketValue, BinaryDeserializeError>> + 'b,
         ),
         BinaryDeserializeError,
@@ -312,7 +326,7 @@ impl<'a> PacketValueReader<'a> {
 
         let value_defs = packet_defs
             .iter()
-            .find(|x| x.id == header.0)
+            .find(|x| x.id == header.id)
             .ok_or(BinaryDeserializeError::InvalidData)?
             .values
             .as_slice();
