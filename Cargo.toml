@@ -1,0 +1,18 @@
+[package]
+name = "pk_flight_log"
+version = "0.2.0"
+edition = "2024"
+description = "Embedded system flash data logging format with built-in wear leveling and power-loss safety"
+license = "MIT"
+repository = "https://github.com/PokeyOne/pk_flight_log"
+keywords = ["data", "aircraft", "flight", "log", "drone"]
+categories = ["aerospace::unmanned-aerial-vehicles", "embedded", "filesystem", "no-std"]
+
+[features]
+defmt = ["dep:defmt"]
+std = []
+
+[dependencies]
+crc = "3.4.0"
+defmt = { version = "1.0.1", optional = true }
+heapless = { version = "0.9.2", default-features = false }
