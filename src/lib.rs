@@ -51,9 +51,9 @@
 
 // TODO: v0.3.0 - NAND & bad blocks
 // TODO: v0.3.0 - What happens if the header block is corrupted?
+// TODO: v0.3.0 - Add the block writer that handles the timestamps.
 // TODO: v0.3.0 - Adjustable block size and other properties.
 // TODO: v0.4.0 - Do we want signed packet timestamps to allow efficient out of order logging?
-// TODO: v0.2.1 - Check if timestamp wrapping and out of order is handled properly?
 
 #![no_std]
 
