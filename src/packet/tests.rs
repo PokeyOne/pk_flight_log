@@ -185,9 +185,9 @@ fn test_write_read_all() {
     w.write_u64(0x1234567890ABCDEF).unwrap();
     w.write_f32(3.14159).unwrap();
 
-    let mut r = PacketValueReader::new(&buf);
-    assert_eq!(r.read_u8().unwrap(), TEST_PACKET_ID);
-    assert_eq!(r.read_u16().unwrap(), 0x1234);
+    let (mut r, header) = PacketValueReader::new(&buf).unwrap();
+    assert_eq!(header.id, TEST_PACKET_ID);
+    assert_eq!(header.timestamp, 0x1234);
     assert_eq!(r.read_u32().unwrap(), 0x12345678);
     assert_eq!(r.read_u64().unwrap(), 0x1234567890ABCDEF);
     assert!((r.read_f32().unwrap() - 3.14159).abs() < f32::EPSILON);
@@ -228,9 +228,9 @@ fn test_read_values_all_whole() {
     w.write_u16(0x3456).unwrap();
     w.write_f32(3.1415926).unwrap();
 
-    let mut r = PacketValueReader::new(&buf);
+    let (r, header) = PacketValueReader::new(&buf).unwrap();
 
-    let (header, mut iterator) = r.read_values(TEST_PACKET_LIST_SLICE).unwrap();
+    let mut iterator = r.read_values(TEST_PACKET_LIST_SLICE).unwrap();
 
     assert_eq!(header.id, TEST_PACKET_ID);
     assert_eq!(header.timestamp, 0x1234);
@@ -240,6 +240,157 @@ fn test_read_values_all_whole() {
     assert_eq!(iterator.next(), None);
 }
 
+#[test]
+fn test_read_values_partial() {
+    let mut buf = [0u8; 64];
+
+    let mut w = PacketWriter::new(&mut buf, PacketHeader::new(TEST_PACKET_ID, 0x1234)).unwrap();
+    w.write_bool(true).unwrap();
+    w.write_bool(true).unwrap();
+    w.write_bool(false).unwrap();
+
+    let packet_def = PacketDef {
+        id: TEST_PACKET_ID,
+        name: FieldName::from_str_truncating("s"),
+        log_to_terminal: false,
+        values: heapless::Vec::from_array([
+            ValueDef {
+                name: FieldName::from_array(*b"a"),
+                kind: ValueKind::Bool,
+                count: 1,
+            },
+            ValueDef {
+                name: FieldName::from_array(*b"b"),
+                kind: ValueKind::Bool,
+                count: 1,
+            },
+            ValueDef {
+                name: FieldName::from_array(*b"c"),
+                kind: ValueKind::Bool,
+                count: 1,
+            },
+        ]),
+    };
+    let slice = &[packet_def];
+
+    let (r, header) = PacketValueReader::new(&buf).unwrap();
+    let mut iterator = r.read_values(slice).unwrap();
+
+    assert_eq!(header.id, TEST_PACKET_ID);
+    assert_eq!(header.timestamp, 0x1234);
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(true))));
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(true))));
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(false))));
+    assert_eq!(iterator.next(), None);
+}
+
+#[test]
+fn test_read_values_partial_multiple() {
+    let mut buf = [0u8; 64];
+
+    let mut w = PacketWriter::new(&mut buf, PacketHeader::new(TEST_PACKET_ID, 0x1234)).unwrap();
+    w.write_bool(true).unwrap();
+    w.write_bool(true).unwrap();
+    w.write_bool(false).unwrap();
+    w.write_bool(true).unwrap();
+    w.write_bool(false).unwrap();
+
+    let packet_def = PacketDef {
+        id: TEST_PACKET_ID,
+        name: FieldName::from_str_truncating("s"),
+        log_to_terminal: false,
+        values: heapless::Vec::from_array([
+            ValueDef {
+                name: FieldName::from_array(*b"a"),
+                kind: ValueKind::Bool,
+                count: 3,
+            },
+            ValueDef {
+                name: FieldName::from_array(*b"b"),
+                kind: ValueKind::Bool,
+                count: 1,
+            },
+            ValueDef {
+                name: FieldName::from_array(*b"c"),
+                kind: ValueKind::Bool,
+                count: 1,
+            },
+        ]),
+    };
+    let slice = &[packet_def];
+
+    let (r, header) = PacketValueReader::new(&buf).unwrap();
+    let mut iterator = r.read_values(slice).unwrap();
+
+    assert_eq!(header.id, TEST_PACKET_ID);
+    assert_eq!(header.timestamp, 0x1234);
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(true))));
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(true))));
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(false))));
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(true))));
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(false))));
+    assert_eq!(iterator.next(), None);
+}
+
+#[test]
+fn test_read_values_partial_many_bytes() {
+    let mut buf = [0u8; 64];
+
+    let mut w = PacketWriter::new(&mut buf, PacketHeader::new(TEST_PACKET_ID, 0x1234)).unwrap();
+    w.write_bool(true).unwrap();
+    w.write_bool(true).unwrap();
+    w.write_bool(false).unwrap();
+    w.write_bool(true).unwrap();
+    w.write_bool(true).unwrap();
+    w.write_bool(false).unwrap();
+    w.write_bool(true).unwrap();
+    w.write_bool(true).unwrap();
+    w.write_bool(false).unwrap();
+    w.write_bool(true).unwrap();
+    w.write_bool(false).unwrap();
+
+    let packet_def = PacketDef {
+        id: TEST_PACKET_ID,
+        name: FieldName::from_str_truncating("s"),
+        log_to_terminal: false,
+        values: heapless::Vec::from_array([
+            ValueDef {
+                name: FieldName::from_array(*b"a"),
+                kind: ValueKind::Bool,
+                count: 9,
+            },
+            ValueDef {
+                name: FieldName::from_array(*b"b"),
+                kind: ValueKind::Bool,
+                count: 1,
+            },
+            ValueDef {
+                name: FieldName::from_array(*b"c"),
+                kind: ValueKind::Bool,
+                count: 1,
+            },
+        ]),
+    };
+    let slice = &[packet_def];
+
+    let (r, header) = PacketValueReader::new(&buf).unwrap();
+    let mut iterator = r.read_values(slice).unwrap();
+
+    assert_eq!(header.id, TEST_PACKET_ID);
+    assert_eq!(header.timestamp, 0x1234);
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(true))));
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(true))));
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(false))));
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(true))));
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(true))));
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(false))));
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(true))));
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(true))));
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(false))));
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(true))));
+    assert_eq!(iterator.next(), Some(Ok(PacketValue::Bool(false))));
+    assert_eq!(iterator.next(), None);
+}
+
 // TODO: test with multi-count value def
-// TODO: test with partial
 // TODO: test with multi-count partials

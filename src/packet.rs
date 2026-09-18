@@ -206,15 +206,32 @@ impl<'a> PacketWriter<'a> {
 pub struct PacketValueReader<'a> {
     buf: &'a [u8],
     used: usize,
+    header: PacketHeader,
 }
 
 impl<'a> PacketValueReader<'a> {
     /// Create a new PacketValueReader that will read from the provided buffer.
     ///
-    /// This does not parse the initial packet header, so is always successful,
-    /// and the header must be read after creating the class.
-    pub fn new(buf: &'a [u8]) -> Self {
-        Self { buf, used: 0 }
+    /// This will also read the packet header from the beginning of the buffer
+    /// and return the result.
+    pub fn new(buf: &'a [u8]) -> Result<(Self, PacketHeader), BinaryDeserializeError> {
+        if buf.len() < 3 {
+            return Err(BinaryDeserializeError::BufferTooSmall);
+        }
+
+        let header = PacketHeader {
+            id: buf[0],
+            timestamp: u16::from_le_bytes([buf[1], buf[2]]),
+        };
+
+        Ok((
+            Self {
+                buf,
+                used: 3,
+                header,
+            },
+            header,
+        ))
     }
 
     pub fn used(&self) -> usize {
@@ -289,122 +306,174 @@ impl<'a> PacketValueReader<'a> {
         Ok(i32::from_le_bytes(buf))
     }
 
-    fn read_packet_id(&mut self) -> Result<PacketID, BinaryDeserializeError> {
-        let mut buf = [0u8; size_of::<PacketID>()];
-        self.read_slice(&mut buf)?;
-        Ok(PacketID::from_le_bytes(buf))
-    }
-
-    fn read_packet_timestamp(&mut self) -> Result<PacketTimestamp, BinaryDeserializeError> {
-        let mut buf = [0u8; size_of::<PacketTimestamp>()];
-        self.read_slice(&mut buf)?;
-        Ok(PacketTimestamp::from_le_bytes(buf))
-    }
-
-    /// Read the header of the packet, which is essentially just the packet
-    /// ID and the timestamp.
-    fn read_header(&mut self) -> Result<PacketHeader, BinaryDeserializeError> {
-        let id = self.read_packet_id()?;
-        let timestamp = self.read_packet_timestamp()?;
-
-        Ok(PacketHeader { id, timestamp })
-    }
-
-    /// Parse the header and return an iterator for parsing all the values
-    /// based on the given value definitions.
-    pub fn read_values<'b>(
-        &'b mut self,
-        packet_defs: &'b [PacketDef],
-    ) -> Result<
-        (
-            PacketHeader,
-            impl Iterator<Item = Result<PacketValue, BinaryDeserializeError>> + 'b,
-        ),
-        BinaryDeserializeError,
-    > {
-        let header = self.read_header()?;
-
+    /// Reads the values of this packet based on the provided metadata
+    /// information.
+    ///
+    /// The given packet defs should be all the expected types of packets, and
+    /// this reader will find the corresponding packet definition based on the
+    /// already read packet ID.
+    pub fn read_values(
+        self,
+        packet_defs: &'a [PacketDef],
+    ) -> Result<PacketValueDefReader<'a>, BinaryDeserializeError> {
+        // Finds the appropriate packet def, then gets all its value defs.
         let value_defs = packet_defs
             .iter()
-            .find(|x| x.id == header.id)
+            .find(|x| x.id == self.header.id)
             .ok_or(BinaryDeserializeError::InvalidData)?
             .values
             .as_slice();
 
-        let mut value_iter = value_defs.iter().peekable();
+        Ok(PacketValueDefReader::new(self, value_defs))
+    }
+}
 
-        let mut sub_byte_bits: u8 = 0;
-        let mut sub_byte_bits_left: u8 = 0;
-        let mut sub_byte_bits_after_current: u32 = 0;
+/// Wraps a [`PacketValueReader`] to parse a set of `ValueDef`s from a packet
+/// def.
+pub struct PacketValueDefReader<'a> {
+    value_reader: PacketValueReader<'a>,
+    /// The value defs in question.
+    value_defs: &'a [ValueDef],
+    /// The index of the next value def to read from the value reader.
+    ///
+    /// May be equal to the length of `value_defs` if all value defs have been
+    /// read.
+    value_def_index: usize,
+    /// The current value def being processed, along with its remaining count.
+    ///
+    /// This is for value defs that have a count higher than 1.
+    current_value_def: Option<(&'a ValueDef, u8)>,
+    /// Temporary storage for the current byte of sub-byte values.
+    sub_byte_bits: u8,
+    /// The number of bits left in `sub_byte_bits` to be consumed.
+    sub_byte_bits_left: u8,
+    /// The number of sub-byte bits remaining after the current value.
+    sub_byte_bits_after_current: u32,
+}
 
-        // Value def that is currently being parsed + remaining values to parse.
-        let mut in_progress: Option<(&ValueDef, u8)> = None;
+impl<'a> PacketValueDefReader<'a> {
+    /// Creates a new `PacketValueDefReader` with the given value reader and
+    /// value defs.
+    ///
+    /// This is usually called from [`PacketValueReader::read_values`] instead
+    /// of directly through this method.
+    pub fn new(value_reader: PacketValueReader<'a>, value_defs: &'a [ValueDef]) -> Self {
+        Self {
+            value_reader,
+            value_defs,
+            value_def_index: 0,
+            current_value_def: None,
+            sub_byte_bits: 0,
+            sub_byte_bits_left: 0,
+            sub_byte_bits_after_current: 0,
+        }
+    }
 
-        let iterator = core::iter::from_fn(move || {
-            loop {
-                if sub_byte_bits_left == 0 && sub_byte_bits_after_current > 0 {
-                    let bits_to_take = if sub_byte_bits_after_current > 8 {
-                        8
-                    } else {
-                        sub_byte_bits_after_current
-                    };
-                    sub_byte_bits_after_current -= bits_to_take;
+    /// Get the next value def to parse.
+    ///
+    /// This already handles the `count` field of the def. e.g. if a value def
+    /// comes through with a count of 3, this method will return it three times
+    /// before going to the next one.
+    fn next_value_def(&mut self) -> Option<&'a ValueDef> {
+        if let Some((value_def, remaining)) = self.current_value_def
+            && remaining != 0
+        {
+            self.current_value_def = Some((value_def, remaining - 1));
+            return Some(value_def);
+        }
+        // Continue on if the remaining was 0 because 0 is nothing left.
 
-                    sub_byte_bits_left = bits_to_take as u8;
-                    sub_byte_bits = self.read_u8().ok()?;
-                }
-
-                if sub_byte_bits_left > 0 {
-                    let value = (sub_byte_bits & 0b0000_0001) != 0;
-                    sub_byte_bits >>= 1;
-                    sub_byte_bits_left -= 1;
-
-                    return Some(Ok(PacketValue::Bool(value)));
-                }
-
-                if in_progress.is_none() || in_progress.is_some_and(|x| x.1 == 0) {
-                    in_progress = value_iter.next().map(|v| {
-                        let count = v.count;
-                        (v, count)
-                    });
-                }
-
-                let (value_def, rem) = in_progress.as_mut()?;
-                #[cfg(test)]
-                assert!(*rem > 0);
-                *rem -= 1;
-                let r = match value_def.kind {
-                    ValueKind::U8 => self.read_u8().map(PacketValue::U8),
-                    ValueKind::U16 => self.read_u16().map(PacketValue::U16),
-                    ValueKind::U32 => self.read_u32().map(PacketValue::U32),
-                    ValueKind::U64 => self.read_u64().map(PacketValue::U64),
-                    ValueKind::F32 => self.read_f32().map(PacketValue::F32),
-                    ValueKind::I8 => self.read_i8().map(PacketValue::I8),
-                    ValueKind::I16 => self.read_i16().map(PacketValue::I16),
-                    ValueKind::I32 => self.read_i32().map(PacketValue::I32),
-                    ValueKind::Bool => {
-                        // Take current value def and add its count to the bits
-                        // to read.
-                        sub_byte_bits_after_current = *rem as u32 + 1;
-                        in_progress = None;
-
-                        // Append all consecutive bit values to the count and
-                        // consume them from the iterator
-                        sub_byte_bits_after_current += value_iter
-                            .by_ref()
-                            .take_while(|v| v.kind == ValueKind::Bool)
-                            .fold(0, |acc, x| acc + x.count as u32);
-
-                        // Continue the loop, which will then handle the sub
-                        // byte bits after current properly.
-                        continue;
-                    }
-                };
-
-                return Some(r);
+        loop {
+            if self.value_def_index >= self.value_defs.len() {
+                return None;
             }
-        });
 
-        Ok((header, iterator))
+            let value_def = &self.value_defs[self.value_def_index];
+            self.value_def_index += 1;
+
+            self.current_value_def = match value_def.count {
+                // This value def has no values, look for the next one.
+                0 => continue,
+                // Don't need to set the current value def because it only has
+                // one value.
+                1 => None,
+                // Set the current value def with n-1 so that the next call will
+                // keep returning the rest.
+                _ => Some((value_def, value_def.count - 1)),
+            };
+
+            return Some(value_def);
+        }
+    }
+}
+
+impl<'a> Iterator for PacketValueDefReader<'a> {
+    type Item = Result<PacketValue, BinaryDeserializeError>;
+
+    /// Get the next packet value to parse.
+    ///
+    /// Returns `None` if at the end of the given buffer, and `Some(Err(_))` if
+    /// there are still bytes but some error in parsing the bytes occurs.
+    fn next(&mut self) -> Option<Result<PacketValue, BinaryDeserializeError>> {
+        loop {
+            if self.sub_byte_bits_left == 0 && self.sub_byte_bits_after_current > 0 {
+                let bits_to_take = self.sub_byte_bits_after_current.min(8);
+                self.sub_byte_bits_after_current -= bits_to_take;
+
+                self.sub_byte_bits_left = bits_to_take as u8;
+                let next_val = match self.value_reader.read_u8() {
+                    Ok(v) => v,
+                    Err(e) => return Some(Err(e)),
+                };
+                // Bits are stored right-aligned in the byte, with MSB being the
+                // first. So need to flip the bits and shift to read out in order
+                // written.
+                self.sub_byte_bits = next_val.reverse_bits() >> (8 - bits_to_take);
+            }
+
+            if self.sub_byte_bits_left > 0 {
+                let value = (self.sub_byte_bits & 0b0000_0001) != 0;
+                self.sub_byte_bits >>= 1;
+                self.sub_byte_bits_left -= 1;
+
+                return Some(Ok(PacketValue::Bool(value)));
+            }
+
+            let value_def = self.next_value_def()?;
+
+            let r = match value_def.kind {
+                ValueKind::U8 => self.value_reader.read_u8().map(PacketValue::U8),
+                ValueKind::U16 => self.value_reader.read_u16().map(PacketValue::U16),
+                ValueKind::U32 => self.value_reader.read_u32().map(PacketValue::U32),
+                ValueKind::U64 => self.value_reader.read_u64().map(PacketValue::U64),
+                ValueKind::F32 => self.value_reader.read_f32().map(PacketValue::F32),
+                ValueKind::I8 => self.value_reader.read_i8().map(PacketValue::I8),
+                ValueKind::I16 => self.value_reader.read_i16().map(PacketValue::I16),
+                ValueKind::I32 => self.value_reader.read_i32().map(PacketValue::I32),
+                ValueKind::Bool => {
+                    self.sub_byte_bits_after_current = self
+                        .current_value_def
+                        .take()
+                        .map_or(0, |(_, rem)| rem as u32)
+                        + 1;
+
+                    // Append all consecutive bit values to the count and
+                    // consume them from the iterator
+                    while self.value_def_index < self.value_defs.len()
+                        && self.value_defs[self.value_def_index].kind == ValueKind::Bool
+                    {
+                        self.sub_byte_bits_after_current +=
+                            self.value_defs[self.value_def_index].count as u32;
+                        self.value_def_index += 1;
+                    }
+
+                    // Continue the loop, which will then handle the sub
+                    // byte bits after current properly.
+                    continue;
+                }
+            };
+
+            return Some(r);
+        }
     }
 }
