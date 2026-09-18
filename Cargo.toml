@@ -1,6 +1,6 @@
 [package]
 name = "pk_flight_log"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Embedded system flash data logging format with built-in wear leveling and power-loss safety"
 license = "MIT"
