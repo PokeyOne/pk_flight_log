@@ -369,6 +369,11 @@ impl<'a> PacketValueDefReader<'a> {
         }
     }
 
+    /// Get a reference to the underlying `PacketValueReader`.
+    pub fn value_reader(&self) -> &PacketValueReader<'a> {
+        &self.value_reader
+    }
+
     /// Get the next value def to parse.
     ///
     /// This already handles the `count` field of the def. e.g. if a value def
